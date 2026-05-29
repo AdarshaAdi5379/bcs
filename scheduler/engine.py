@@ -11,7 +11,9 @@ def run(scenario: Scenario) -> ScheduleResult:
     sorted_buses = sorted(scenario.buses, key=lambda b: (b.departure_time_minutes, b.id))
 
     charger_states: dict[str, ChargerState] = {
-        sid: ChargerState(available_time=0, queue=[])
+        sid: ChargerState(
+            available_times=[0] * scenario.chargers_per_station.get(sid, 1),
+        )
         for sid in scenario.station_ids
     }
 
@@ -74,8 +76,13 @@ def run(scenario: Scenario) -> ScheduleResult:
 
 
 def _clone_charger_states(states: dict[str, ChargerState]) -> dict[str, ChargerState]:
-    return {sid: ChargerState(available_time=cs.available_time, queue=list(cs.queue))
-            for sid, cs in states.items()}
+    return {
+        sid: ChargerState(
+            available_times=list(cs.available_times),
+            queue=list(cs.queue),
+        )
+        for sid, cs in states.items()
+    }
 
 
 def _build_partial_result(

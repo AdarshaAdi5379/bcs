@@ -24,8 +24,21 @@ class SimEvent:
 
 @dataclass
 class ChargerState:
-    available_time: int
-    queue: list[str]
+    available_times: list[int]
+    queue: list[str] = field(default_factory=list)
+
+    @property
+    def next_available(self) -> int:
+        return min(self.available_times)
+
+    def allocate_slot(self, arrival: int, charge_time: int) -> int:
+        idx = min(
+            range(len(self.available_times)),
+            key=lambda i: self.available_times[i],
+        )
+        start = max(arrival, self.available_times[idx])
+        self.available_times[idx] = start + charge_time
+        return start
 
 
 def _compute_travel_time(distance_km: float, speed_kmh: float) -> int:
@@ -50,15 +63,15 @@ def simulate(
     charge_time = scenario.constants.get("charge_time_min", 25)
     speed = scenario.constants.get("speed_kmh", 60)
     chargers = {
-        sid: ChargerState(available_time=0, queue=[])
+        sid: ChargerState(
+            available_times=[0] * scenario.chargers_per_station.get(sid, 1),
+        )
         for sid in scenario.station_ids
     }
 
-    bus_sort_key = {b.id: b.departure_time_minutes for b in scenario.buses}
     bus_dir = {b.id: b.direction for b in scenario.buses}
     bus_plan_index: dict[str, int] = {}
     bus_last_departure: dict[str, int] = {}
-    bus_timelines: dict[str, BusTimeline] = {}
     bus_events: dict[str, list[ChargingEvent]] = {b.id: [] for b in scenario.buses}
     station_entries: dict[str, list[StationChargeEntry]] = {
         sid: [] for sid in scenario.station_ids
@@ -95,15 +108,10 @@ def simulate(
             arrival_time = event.time
 
             cs = chargers[station_id]
-
-            if arrival_time >= cs.available_time:
-                charge_start = arrival_time
-            else:
-                charge_start = cs.available_time
+            charge_start = cs.allocate_slot(arrival_time, charge_time)
 
             charge_end = charge_start + charge_time
             departure_time = charge_end
-            cs.available_time = charge_end
 
             ev = ChargingEvent(
                 station_id=station_id,
@@ -195,10 +203,9 @@ def simulate_bus_on_state(
         arrival = last_departure + travel
 
         cs = charger_states[station_id]
-        charge_start = max(arrival, cs.available_time)
+        charge_start = cs.allocate_slot(arrival, charge_time)
         charge_end = charge_start + charge_time
         departure = charge_end
-        cs.available_time = charge_end
 
         events.append(ChargingEvent(
             station_id=station_id,
