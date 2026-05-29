@@ -162,9 +162,26 @@ class StationLog:
 
 
 @dataclass
+class AlternativePlan:
+    plan: list[str]
+    score: float
+    breakdown: dict[str, float]
+
+
+@dataclass
+class PlanExplanation:
+    bus_id: str
+    chosen_plan: list[str]
+    chosen_score: float
+    alternatives: list[AlternativePlan]
+    key_reason: str
+
+
+@dataclass
 class ScheduleResult:
     scenario_name: str
     bus_timelines: list[BusTimeline]
     station_logs: dict[str, StationLog]
     scores: dict[str, float]
     weights_used: dict[str, float]
+    explanations: dict[str, PlanExplanation] = field(default_factory=dict)

@@ -37,3 +37,7 @@ class Planner:
         partial = state.to_schedule_result()
         scores = registry.evaluate_soft(partial, self.scenario.weights)
         return scores.get("combined", 0.0)
+
+    def score_state_breakdown(self, state: SchedulingState) -> dict[str, float]:
+        partial = state.to_schedule_result()
+        return registry.evaluate_soft(partial, self.scenario.weights)

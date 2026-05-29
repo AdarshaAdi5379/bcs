@@ -141,6 +141,27 @@ with tab2:
                         })
                     st.table(event_data)
 
+            expl = result.explanations.get(tl.bus.id)
+            if expl:
+                with st.expander("Plan Selection", expanded=False):
+                    st.text(f"Chosen: {', '.join(expl.chosen_plan) if expl.chosen_plan else '(direct)'}")
+                    if expl.key_reason:
+                        st.text(f"Why: {expl.key_reason}")
+                    if expl.alternatives:
+                        alt_data = []
+                        for a in expl.alternatives:
+                            plan_str = ", ".join(a.plan) if a.plan else "(direct)"
+                            breakdown_str = ", ".join(
+                                f"{k}={v:.0f}" for k, v in a.breakdown.items()
+                                if k != "combined"
+                            )
+                            alt_data.append({
+                                "Plan": plan_str,
+                                "Combined": f"{a.score:.1f}",
+                                "Breakdown": breakdown_str,
+                            })
+                        st.table(alt_data)
+
 with tab3:
     if result is None:
         st.info("Click 'Run Schedule' in the sidebar to compute the schedule.")
