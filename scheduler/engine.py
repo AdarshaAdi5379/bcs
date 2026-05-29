@@ -3,6 +3,7 @@ from scheduler.planner import Planner
 from scheduler.state import SchedulingState
 from scheduler.simulator import simulate
 from scheduler.rules import registry
+from scheduler.validator import Validator
 
 
 def run(
@@ -10,6 +11,18 @@ def run(
     strategy: str = "greedy",
 ) -> ScheduleResult:
     registry.initialize()
+
+    validator = Validator()
+    validation = validator.validate_scenario(scenario)
+    if not validation.is_valid:
+        error_result = ScheduleResult(
+            scenario_name=scenario.name,
+            bus_timelines=[],
+            station_logs={},
+            scores={"error": 1e9, "combined": 1e9, "messages": validation.errors},
+            weights_used=dict(scenario.weights),
+        )
+        return error_result
 
     if strategy == "greedy":
         state = _run_greedy(scenario)
