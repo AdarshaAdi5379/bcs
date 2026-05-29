@@ -2,7 +2,7 @@ import os
 import streamlit as st
 from scheduler.scenario_loader import load_scenario, list_scenario_files, scenario_name_from_file
 from scheduler.engine import run
-from scheduler.scoring import registered_rules
+from scheduler.rules import registry
 
 SCENARIOS_DIR = os.path.join(os.path.dirname(__file__), "data", "scenarios")
 

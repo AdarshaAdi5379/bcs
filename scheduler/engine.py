@@ -1,11 +1,11 @@
-from copy import deepcopy
-from scheduler.domain import Scenario, ScheduleResult, BusTimeline, ChargingEvent
+from scheduler.domain import Scenario, ScheduleResult, BusTimeline
 from scheduler.router import find_feasible_plans
 from scheduler.simulator import simulate, simulate_bus_on_state, ChargerState
-from scheduler.scoring import evaluate, registered_rules
+from scheduler.rules import registry
 
 
 def run(scenario: Scenario) -> ScheduleResult:
+    registry.initialize()
     battery_range = scenario.constants.get("battery_range_km", 240)
 
     sorted_buses = sorted(scenario.buses, key=lambda b: (b.departure_time_minutes, b.id))
@@ -19,7 +19,19 @@ def run(scenario: Scenario) -> ScheduleResult:
     committed_timelines: dict[str, BusTimeline] = {}
 
     for bus in sorted_buses:
-        feasible = find_feasible_plans(bus, scenario.route, battery_range)
+        raw_feasible = find_feasible_plans(bus, scenario.route, battery_range)
+
+        feasible = []
+        context = {
+            "bus": bus,
+            "route": scenario.route,
+            "battery_range": battery_range,
+        }
+        for p in raw_feasible:
+            errors = registry.validate_hard(p, context)
+            if not errors:
+                feasible.append(p)
+
         if not feasible:
             feasible = [[]]
 
@@ -34,7 +46,7 @@ def run(scenario: Scenario) -> ScheduleResult:
             temp_timelines[bus.id] = tl
 
             partial_result = _build_partial_result(scenario, temp_timelines)
-            scores = evaluate(partial_result, scenario.weights)
+            scores = registry.evaluate_soft(partial_result, scenario.weights)
             combined = scores.get("combined", 0.0)
 
             if combined < best_score:
@@ -49,7 +61,13 @@ def run(scenario: Scenario) -> ScheduleResult:
         committed_timelines[bus.id] = real_tl
 
     full_result = simulate(scenario, committed_plans)
-    final_scores = evaluate(full_result, scenario.weights)
+
+    hard_errors = registry.validate_hard(full_result, {"chargers_per_station": scenario.chargers_per_station})
+    if hard_errors:
+        full_result.scores = {"error": 1e9, "combined": 1e9, "messages": hard_errors}
+        return full_result
+
+    final_scores = registry.evaluate_soft(full_result, scenario.weights)
     full_result.scores = final_scores
 
     return full_result
