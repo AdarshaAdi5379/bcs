@@ -1,99 +1,75 @@
-from scheduler.domain import Scenario, ScheduleResult, BusTimeline
-from scheduler.router import find_feasible_plans
-from scheduler.simulator import simulate, simulate_bus_on_state, ChargerState
+from scheduler.domain import Scenario, ScheduleResult
+from scheduler.planner import Planner
+from scheduler.state import SchedulingState
+from scheduler.simulator import simulate
 from scheduler.rules import registry
 
 
-def run(scenario: Scenario) -> ScheduleResult:
+def run(
+    scenario: Scenario,
+    strategy: str = "greedy",
+) -> ScheduleResult:
     registry.initialize()
-    battery_range = scenario.constants.get("battery_range_km", 240)
 
-    sorted_buses = sorted(scenario.buses, key=lambda b: (b.departure_time_minutes, b.id))
+    if strategy == "greedy":
+        state = _run_greedy(scenario)
+    else:
+        state = _run_beam(scenario)
 
-    charger_states: dict[str, ChargerState] = {
-        sid: ChargerState(
-            available_times=[0] * scenario.chargers_per_station.get(sid, 1),
-        )
-        for sid in scenario.station_ids
-    }
-
-    committed_plans: dict[str, list[str]] = {}
-    committed_timelines: dict[str, BusTimeline] = {}
-
-    for bus in sorted_buses:
-        raw_feasible = find_feasible_plans(bus, scenario.route, battery_range)
-
-        feasible = []
-        context = {
-            "bus": bus,
-            "route": scenario.route,
-            "battery_range": battery_range,
-        }
-        for p in raw_feasible:
-            errors = registry.validate_hard(p, context)
-            if not errors:
-                feasible.append(p)
-
-        if not feasible:
-            feasible = [[]]
-
-        best_plan = None
-        best_score = float("inf")
-
-        for plan in feasible:
-            cs_copy = _clone_charger_states(charger_states)
-            tl = simulate_bus_on_state(scenario, bus, plan, cs_copy)
-
-            temp_timelines = dict(committed_timelines)
-            temp_timelines[bus.id] = tl
-
-            partial_result = _build_partial_result(scenario, temp_timelines)
-            scores = registry.evaluate_soft(partial_result, scenario.weights)
-            combined = scores.get("combined", 0.0)
-
-            if combined < best_score:
-                best_score = combined
-                best_plan = plan
-
-        if best_plan is None:
-            best_plan = feasible[0] if feasible else []
-
-        committed_plans[bus.id] = best_plan
-        real_tl = simulate_bus_on_state(scenario, bus, best_plan, charger_states)
-        committed_timelines[bus.id] = real_tl
-
+    committed_plans = state.committed_plans
     full_result = simulate(scenario, committed_plans)
 
-    hard_errors = registry.validate_hard(full_result, {"chargers_per_station": scenario.chargers_per_station})
+    hard_errors = registry.validate_hard(
+        full_result,
+        {"chargers_per_station": scenario.chargers_per_station},
+    )
     if hard_errors:
         full_result.scores = {"error": 1e9, "combined": 1e9, "messages": hard_errors}
         return full_result
 
     final_scores = registry.evaluate_soft(full_result, scenario.weights)
     full_result.scores = final_scores
-
     return full_result
 
 
-def _clone_charger_states(states: dict[str, ChargerState]) -> dict[str, ChargerState]:
-    return {
-        sid: ChargerState(
-            available_times=list(cs.available_times),
-            queue=list(cs.queue),
-        )
-        for sid, cs in states.items()
-    }
+def _run_greedy(scenario: Scenario) -> SchedulingState:
+    planner = Planner(scenario)
+    state = SchedulingState(scenario)
+
+    for bus in planner.buses_sorted:
+        plans = planner.generate_candidates(bus)
+        best_plan = plans[0]
+        best_score = float("inf")
+
+        for plan in plans:
+            branch = state.clone()
+            branch.add_bus(bus, plan)
+            score = planner.score_state(branch)
+            if score < best_score:
+                best_score = score
+                best_plan = plan
+
+        state.add_bus(bus, best_plan)
+
+    return state
 
 
-def _build_partial_result(
-    scenario: Scenario,
-    timelines: dict[str, BusTimeline],
-) -> ScheduleResult:
-    tl_list = list(timelines.values())
-    return ScheduleResult(
-        scenario_name=scenario.name,
-        bus_timelines=tl_list,
-        station_logs={},
-        scores={},
-        weights_used=dict(scenario.weights),
-    )
+def _run_beam(scenario: Scenario, beam_width: int = 3) -> SchedulingState:
+    planner = Planner(scenario)
+    states = [SchedulingState(scenario)]
+
+    for bus in planner.buses_sorted:
+        plans = planner.generate_candidates(bus)
+        scored_states: list[tuple[float, SchedulingState]] = []
+
+        for s in states:
+            for plan in plans:
+                branch = s.clone()
+                branch.add_bus(bus, plan)
+                score = planner.score_state(branch)
+                scored_states.append((score, branch))
+
+        scored_states.sort(key=lambda x: x[0])
+        states = [s for _, s in scored_states[:beam_width]]
+
+    return states[0] if states else SchedulingState(scenario)
